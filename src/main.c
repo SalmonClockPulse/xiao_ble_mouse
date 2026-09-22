@@ -1,10 +1,12 @@
-#include "zephyr/bluetooth/uuid.h"
 #include <stdint.h>
 #include <sys/cdefs.h>
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/bluetooth/gatt.h>
+
+#include "ble_hid.c"
+#include "zephyr/bluetooth/conn.h"
 
 #define STACK_SIZE 1024
 #define PRIORITY 7
@@ -15,88 +17,21 @@ struct sensor_data {
     struct sensor_value z;
 };
 
-struct mouse_report {
-    uint8_t buttons;
-    int8_t x;
-    int8_t y;
-};
-
-static const uint8_t report_desc[] = {
-    0x05, 0x01, // Usage Page (Generic desktop)
-    0x09, 0x02, // Usage (Mouse)
-    0xa1, 0x01, // Collection (Application)
-    0x09, 0x01, // Usage (Pointer)
-    0xa1, 0x00, // Collection (Physical)
-    0x05, 0x09, // Usage Page (Button)
-    0x19, 0x01, // Usage Minimum (1)
-    0x29, 0x03, // Usage Maximum (3)
-    0x15, 0x00, // Logical Minimum (0)
-    0x25, 0x01, // Logical Maximum (1)
-    0x75, 0x01, // Report Size (1)
-    0x95, 0x03, // Report Count (3)
-    0x81, 0x02, // Input (Data, Var, Abs)
-    0x75, 0x05, // Report Size (5)
-    0x95, 0x01, // Report Count (1)
-    0x81, 0x01, // Input (Cnst, Arr, Abs)
-    0x05, 0x01, // Usage Page (Generic Desktop)
-    0x09, 0x30, // Usage (X)
-    0x09, 0x31, // Usage (Y)
-    0x09, 0x38, // Usage (Wheel)
-    0x15, 0x81, // Logical Minimum (-127)
-    0x25, 0x7f, // Logical Maximum (127)
-    0x75, 0x08, // Report Size (8)
-    0x95, 0x03, // Report Count (3)
-    0x81, 0x06, // Input (Data, Var, Rel)
-    0xc0,       // End Collection
-    0xc0,       // End Collection
-};
-
-struct hids_info {
-    uint16_t version;
-    uint8_t code;
-    uint8_t flags;
-} __packed;
-
-static struct hids_info info = {
-    .version = 0x0000,
-    .code = 0x00,
-    .flags = BIT(1)
-};
-
-static ssize_t read_info(
-    struct bt_conn *conn,
-    const struct bt_gatt_attr *attr, void *buf,
-    uint16_t len, uint16_t offset)
+static void auth_passkey_display(struct bt_conn *conn, unsigned int passkey)
 {
-    return bt_gatt_attr_read(
-        conn, attr, buf, len, offset, attr->user_data,
-        sizeof(struct hids_info));
+    printk("Passkey for %s: %06u\n", bt_conn_dst_str(conn), passkey);
 }
 
-static ssize_t read_report_map(
-    struct bt_conn *conn, const struct bt_gatt_attr *attr,
-    void *buf, uint16_t len, uint16_t offset)
+static void auth_cancel(struct bt_conn *conn)
 {
-    return bt_gatt_attr_read(
-        conn, attr, buf, len, offset, report_desc, sizeof(report_desc));
+    printk("Pairing cancelled: %s\n", bt_conn_dst_str(conn));
 }
 
-static ssize_T read_input_report()
-
-BT_GATT_SERVICE_DEFINE(hog_svc,
-    BT_GATT_PRIMARY_SERVICE(BT_UUID_HIDS),
-    BT_GATT_CHARACTERISTIC(
-        BT_UUID_HIDS_INFO, BT_GATT_CHRC_READ,
-        BT_GATT_PERM_READ, read_info, NULL, &info),
-    BT_GATT_CHARACTERISTIC(
-        BT_UUID_HIDS_REPORT_MAP, BT_GATT_CHRC_READ,
-        BT_GATT_PERM_READ, read_report_map, NULL, NULL),
-    BT_GATT_CHARACTERISTIC(
-        BT_UUID_HIDS_INFO,
-        BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
-        BT_GATT_PERM_READ_ENCRYPT, read_input_report, NULL, NULL),
-    )
-);
+static struct bt_conn_auth_cb auth_cb_display = {
+    .passkey_display = auth_passkey_display,
+    .passkey_entry = NULL,
+    .cancel = auth_cancel
+};
 
 K_MSGQ_DEFINE_STATIC(gyro_value, sizeof(struct sensor_data), 10, 4);
 
@@ -128,10 +63,10 @@ void get_lsm6dsl_value()
         sensor_channel_get(lsm6dsl_dev, SENSOR_CHAN_GYRO_X, &gyro_set.x);
         sensor_channel_get(lsm6dsl_dev, SENSOR_CHAN_GYRO_Y, &gyro_set.y);
         sensor_channel_get(lsm6dsl_dev, SENSOR_CHAN_GYRO_Z, &gyro_set.z);
-        printk("gyro_x: %d.%d gyro_y: %d.%d gyro_z:%d.%d\n",
-            gyro_set.x.val1, gyro_set.x.val2,
-            gyro_set.y.val1, gyro_set.y.val2,
-            gyro_set.z.val1, gyro_set.z.val2);
+        //printk("gyro_x: %d.%d gyro_y: %d.%d gyro_z:%d.%d\n",
+        //    gyro_set.x.val1, gyro_set.x.val2,
+        //    gyro_set.y.val1, gyro_set.y.val2,
+        //    gyro_set.z.val1, gyro_set.z.val2);
     }
 
     k_msgq_put(&gyro_value, &gyro_set, K_NO_WAIT);
@@ -139,11 +74,23 @@ void get_lsm6dsl_value()
 
 void send_hid_report()
 {
-    struct mouse_report mouse_map;
+    int err;
+
+    err = bt_enable(bt_ready);
+    if (err) {
+        printk("Bluetooth init failed (err %d)\n", err);
+        return;
+    }
+
+    if (IS_ENABLED(CONFIG_SAMPLE_BT_USE_AUTHENTICATION)) {
+        bt_conn_auth_cb_register(&auth_cb_display);
+        printk("Bluetooth authentication callbacks registered.\n");
+    }
     while(1){
-        bt_gatt_notify(NULL, &hog_svc.attrs[5], &mouse_map, sizeof(struct mouse_report));
+        send_mouse_report(10, 0, 0);
         k_sleep(K_MSEC(100));
     }
 }
 
 K_THREAD_DEFINE(get_lsm6dsl_value_id, STACK_SIZE, get_lsm6dsl_value, NULL, NULL, NULL, PRIORITY, 0, 0);
+K_THREAD_DEFINE(send_hid_report_id, STACK_SIZE, send_hid_report, NULL, NULL, NULL, PRIORITY, 0, 0);
