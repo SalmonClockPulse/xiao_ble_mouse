@@ -1,3 +1,5 @@
+#include "zephyr/kernel.h"
+#include "zephyr/sys/util.h"
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/bluetooth/uuid.h>
@@ -20,33 +22,34 @@ static const struct bt_data sd[] = {
 };
 
 static const uint8_t report_desc[] = {
-    0x05, 0x01, // Usage Page (Generic desktop)
-    0x09, 0x02, // Usage (Mouse)
-    0xa1, 0x01, // Collection (Application)
-    0x09, 0x01, // Usage (Pointer)
-    0xa1, 0x00, // Collection (Physical)
-    0x05, 0x09, // Usage Page (Button)
-    0x19, 0x01, // Usage Minimum (1)
-    0x29, 0x03, // Usage Maximum (3)
-    0x15, 0x00, // Logical Minimum (0)
-    0x25, 0x01, // Logical Maximum (1)
-    0x75, 0x01, // Report Size (1)
-    0x95, 0x03, // Report Count (3)
-    0x81, 0x02, // Input (Data, Var, Abs)
-    0x75, 0x05, // Report Size (5)
-    0x95, 0x01, // Report Count (1)
-    0x81, 0x01, // Input (Cnst, Arr, Abs)
-    0x05, 0x01, // Usage Page (Generic Desktop)
-    0x09, 0x30, // Usage (X)
-    0x09, 0x31, // Usage (Y)
-    0x09, 0x38, // Usage (Wheel)
-    0x15, 0x81, // Logical Minimum (-127)
-    0x25, 0x7f, // Logical Maximum (127)
-    0x75, 0x08, // Report Size (8)
-    0x95, 0x03, // Report Count (3)
-    0x81, 0x06, // Input (Data, Var, Rel)
-    0xc0,       // End Collection
-    0xc0,       // End Collection
+    0x05, 0x01,       // Usage Page (Generic Desktop)
+    0x09, 0x02,       // Usage (Mouse)
+    0xA1, 0x01,       // Collection (Application)
+    0x85, 0x01,       // Report ID (ID 1)
+    0x09, 0x01,       // Usage (Pointer)
+    0xA1, 0x00,       // Collection (Physical)
+    0x05, 0x09,       // Usage Page (Button)
+    0x19, 0x01,       // Usage Minimum (Button 1)
+    0x29, 0x03,       // Usage Maximum (Button 3)
+    0x15, 0x00,       // Logical Minimum (0)
+    0x25, 0x01,       // Logical Maximum (1)
+    0x75, 0x01,       // Report Size (1)
+    0x95, 0x03,       // Report Count (3)
+    0x81, 0x02,       // Input (Data, Var, Abs)
+    0x75, 0x01,       // Report Size (1)
+    0x95, 0x05,       // Report Count (5)
+    0x81, 0x03,       // Input (Const, Var, Abs)
+    0x05, 0x01,       // Usage Page (Generic Desktop)
+    0x09, 0x30,       // Usage (X)
+    0x09, 0x31,       // Usage (Y)
+    0x09, 0x38,       // Usage (Wheel)
+    0x15, 0x80,       // Logical Minimum (-128)
+    0x25, 0x7F,       // Logical Maximum (127)
+    0x75, 0x08,       // Report Size (8)
+    0x95, 0x03,       // Report Count (3)
+    0x81, 0x06,       // Input (Data, Var, Rel)
+    0xC0,             // End Collection
+    0xC0              // End Collection
 };
 
 struct hids_info {
@@ -139,7 +142,7 @@ BT_GATT_SERVICE_DEFINE(hog_svc,
     BT_GATT_CHARACTERISTIC(
         BT_UUID_HIDS_REPORT,
         BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
-        BT_GATT_PERM_READ_ENCRYPT, read_input_report, NULL, NULL),
+        BT_GATT_PERM_READ, read_input_report, NULL, NULL),
     BT_GATT_CCC(
         input_ccc_changed,
         BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
@@ -151,8 +154,36 @@ BT_GATT_SERVICE_DEFINE(hog_svc,
         BT_GATT_PERM_WRITE, NULL, write_ctrl_point, &ctrl_point),
 );
 
+static struct k_work adv_work;
+
+static void restart_adv_handler(struct k_work *work)
+{
+    int err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+    if (err) printk("Failed to restart advertising. (err %d)\n", err);
+    else printk("Advertising restarted successfully\n");
+}
+
+static void connected(struct bt_conn *conn, uint8_t err)
+{
+    if (err) printk("Connection failed Error.\n");
+    else printk("Connected\n");
+}
+
+static void disconnected(struct bt_conn *conn, uint8_t reason)
+{
+    printk("Disconnected.\n");
+
+    k_work_submit(&adv_work);
+}
+
+BT_CONN_CB_DEFINE(conn_callbacks) ={
+    .connected = connected,
+    .disconnected = disconnected
+};
+
 void bt_ready(int err)
 {
+    k_work_init(&adv_work, restart_adv_handler);
     if (err) {
         printk("Bluetooth init failed (err %d)\n", err);
         return;
@@ -171,9 +202,9 @@ void bt_ready(int err)
     printk("Advertising successfully started\n");
 }
 
-void send_mouse_report(int8_t x, int8_t y, uint8_t buttons)
+void send_mouse_report(int8_t x, int8_t y, uint8_t buttons, int8_t wheel)
 {
-    uint8_t report[3] = {buttons, x, y};
+    uint8_t report[4] = {buttons, (uint8_t)x, (uint8_t)y, (uint8_t)wheel};
     if (simulate_input){
         bt_gatt_notify(NULL, &hog_svc.attrs[5], report, sizeof(report));
         printk("Send butons: %d x: %d y: %d \n", report[0], report[1], report[2]);

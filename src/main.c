@@ -4,9 +4,9 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/bluetooth/gatt.h>
+#include <zephyr/bluetooth/conn.h>
 
 #include "ble_hid.c"
-#include "zephyr/bluetooth/conn.h"
 
 #define STACK_SIZE 1024
 #define PRIORITY 7
@@ -37,6 +37,16 @@ K_MSGQ_DEFINE_STATIC(gyro_value, sizeof(struct sensor_data), 10, 4);
 
 static const struct device *const lsm6dsl_dev = DEVICE_DT_GET_ONE(st_lsm6dsl);
 
+int8_t sensor_value2int8(const struct sensor_value *val, int32_t scale)
+{
+    int64_t micro = (int64_t)val->val1 * 1000000LL + val->val2;
+    int64_t scaled = (micro * scale) / 1000000LL;
+
+    if (scaled > 127) return 127;
+    else if (scaled < -128) return -128;
+    return (int8_t)scaled;
+}
+
 void get_lsm6dsl_value()
 {
     struct sensor_value odr_attr;
@@ -63,18 +73,19 @@ void get_lsm6dsl_value()
         sensor_channel_get(lsm6dsl_dev, SENSOR_CHAN_GYRO_X, &gyro_set.x);
         sensor_channel_get(lsm6dsl_dev, SENSOR_CHAN_GYRO_Y, &gyro_set.y);
         sensor_channel_get(lsm6dsl_dev, SENSOR_CHAN_GYRO_Z, &gyro_set.z);
+        k_msgq_put(&gyro_value, &gyro_set, K_NO_WAIT);
         //printk("gyro_x: %d.%d gyro_y: %d.%d gyro_z:%d.%d\n",
         //    gyro_set.x.val1, gyro_set.x.val2,
         //    gyro_set.y.val1, gyro_set.y.val2,
         //    gyro_set.z.val1, gyro_set.z.val2);
     }
-
-    k_msgq_put(&gyro_value, &gyro_set, K_NO_WAIT);
 }
 
 void send_hid_report()
 {
     int err;
+    const int32_t scale = 10;
+    struct sensor_data gyro_get;
 
     err = bt_enable(bt_ready);
     if (err) {
@@ -87,8 +98,13 @@ void send_hid_report()
         printk("Bluetooth authentication callbacks registered.\n");
     }
     while(1){
-        send_mouse_report(10, 0, 0);
-        k_sleep(K_MSEC(100));
+        k_msgq_get(&gyro_value, &gyro_get, K_FOREVER);
+        gyro_get.y.val1 = -gyro_get.y.val1;
+        gyro_get.z.val1 = -gyro_get.z.val1;
+        send_mouse_report(
+        //0,0,0,1);
+            sensor_value2int8(&gyro_get.z, scale),
+            sensor_value2int8(&gyro_get.y, scale),0,0);
     }
 }
 
