@@ -1,0 +1,13 @@
+/ {
+    aliases {
+        cursor-enable-button = &cursor_enable;
+    };
+
+    buttons {
+        compatible = "gpio-keys";
+
+        cursor_enable: button_0 {
+            gpios = <&xiao_d 0 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+        };
+    };
+};

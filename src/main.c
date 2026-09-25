@@ -1,7 +1,6 @@
-#include <stdint.h>
-#include <sys/cdefs.h>
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/conn.h>
@@ -10,6 +9,8 @@
 
 #define STACK_SIZE 1024
 #define PRIORITY 7
+
+static const struct gpio_dt_spec cursor_enable_button = GPIO_DT_SPEC_GET(DT_ALIAS(cursor_enable_button), gpios);
 
 struct sensor_data {
     struct sensor_value x;
@@ -87,6 +88,8 @@ void send_hid_report()
     const int32_t scale = 10;
     struct sensor_data gyro_get;
 
+    gpio_pin_configure_dt(&cursor_enable_button, GPIO_INPUT);
+
     err = bt_enable(bt_ready);
     if (err) {
         printk("Bluetooth init failed (err %d)\n", err);
@@ -99,13 +102,16 @@ void send_hid_report()
     }
     while(1){
         k_msgq_get(&gyro_value, &gyro_get, K_FOREVER);
-        gyro_get.y.val1 = -gyro_get.y.val1;
-        gyro_get.y.val2 = -gyro_get.y.val2;
-        gyro_get.z.val1 = -gyro_get.z.val1;
-        gyro_get.z.val2 = -gyro_get.z.val2;
-        send_mouse_report(
-            sensor_value2int8(&gyro_get.z, scale),
-            sensor_value2int8(&gyro_get.y, scale),0,0);
+        int is_cursor = gpio_pin_get_dt(&cursor_enable_button);
+        if (is_cursor == 0) {
+            gyro_get.y.val1 = -gyro_get.y.val1;
+            gyro_get.y.val2 = -gyro_get.y.val2;
+            gyro_get.z.val1 = -gyro_get.z.val1;
+            gyro_get.z.val2 = -gyro_get.z.val2;
+            send_mouse_report(
+                sensor_value2int8(&gyro_get.z, scale),
+                sensor_value2int8(&gyro_get.y, scale),0,0);
+        }
     }
 }
 
