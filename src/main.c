@@ -9,6 +9,7 @@
 
 #define STACK_SIZE 1024
 #define PRIORITY 7
+#define SENSOR_POLL_INTERVAL_MS 10
 
 static const struct gpio_dt_spec cursor_enable_button = GPIO_DT_SPEC_GET(DT_ALIAS(cursor_enable_button), gpios);
 
@@ -79,6 +80,8 @@ void get_lsm6dsl_value()
         //    gyro_set.x.val1, gyro_set.x.val2,
         //    gyro_set.y.val1, gyro_set.y.val2,
         //    gyro_set.z.val1, gyro_set.z.val2);
+
+        k_msleep(SENSOR_POLL_INTERVAL_MS);
     }
 }
 
