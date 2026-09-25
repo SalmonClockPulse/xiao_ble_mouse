@@ -100,9 +100,10 @@ void send_hid_report()
     while(1){
         k_msgq_get(&gyro_value, &gyro_get, K_FOREVER);
         gyro_get.y.val1 = -gyro_get.y.val1;
+        gyro_get.y.val2 = -gyro_get.y.val2;
         gyro_get.z.val1 = -gyro_get.z.val1;
+        gyro_get.z.val2 = -gyro_get.z.val2;
         send_mouse_report(
-        //0,0,0,1);
             sensor_value2int8(&gyro_get.z, scale),
             sensor_value2int8(&gyro_get.y, scale),0,0);
     }
