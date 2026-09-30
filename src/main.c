@@ -1,11 +1,11 @@
 #include <stdint.h>
+#include <stdlib.h>
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/conn.h>
-#include <math.h>
 
 #include "ble_hid.c"
 
@@ -14,7 +14,14 @@
 #define SENSOR_POLL_INTERVAL_MS 10
 #define CURSOR_DEADZONE 0.05
 
+#define CHANGE_SCALE_BUTTON_PUSHED (1U << 0)
+
 static const struct gpio_dt_spec cursor_enable_button = GPIO_DT_SPEC_GET(DT_ALIAS(cursor_enable_button), gpios);
+static const struct gpio_dt_spec change_scale_button = GPIO_DT_SPEC_GET(DT_ALIAS(change_scale_button), gpios);
+static const double scale[3] = {10, 50, 100};
+
+static uint8_t scale_index = 0;
+static uint8_t is_push;
 
 struct sensor_data {
     struct {
@@ -103,21 +110,35 @@ void get_lsm6dsl_value()
     }
 }
 
-int8_t calculate_cursor_movement(const struct sensor_value *gyro, const struct sensor_value *accel, double scale)
+void change_scale()
 {
-    double g_val = (double)gyro->val1 + (double)gyro->val2 / 1000000.0;
-    double a_val = (double)accel->val1 + (double)accel->val2 / 1000000.0;
+    if (is_push & CHANGE_SCALE_BUTTON_PUSHED) {
+        return;
+    }
+    scale_index += 1;
+    uint8_t scale_size = sizeof(scale) / sizeof(scale[0]);
+    if (scale_index >= scale_size){
+        scale_index = 0;
+    }
+    is_push |= CHANGE_SCALE_BUTTON_PUSHED;
+}
 
-    if (fabs(g_val) < CURSOR_DEADZONE) {
+int8_t calculate_cursor_movement(const struct sensor_value *gyro, const struct sensor_value *accel)
+{
+    double g_sign = 1.0;
+    if (gyro->val1 < 0 || gyro->val2 < 0) g_sign = -1.0;
+
+    double g_val = labs(gyro->val1) + labs(gyro->val2) / 1000000.0;
+    double a_val = labs(accel->val1) + labs(accel->val2) / 1000000.0;
+
+    if (g_val < CURSOR_DEADZONE) {
         return 0;
     }
 
-    double accel_intensity = fabs(a_val);
+    double dynamic_scale = scale[scale_index] + (a_val * 5.0);
+    if (dynamic_scale > scale[scale_index] * 3.0) dynamic_scale = scale[scale_index] * 3.0;
 
-    double dynamic_scale = scale + (accel_intensity * 5.0);
-    if (dynamic_scale > scale * 3.0) dynamic_scale = scale * 3.0;
-
-    double movement = g_val * dynamic_scale;
+    double movement = g_sign * g_val * dynamic_scale;
 
     if (movement > 127.0) {
         return 127;
@@ -131,10 +152,10 @@ int8_t calculate_cursor_movement(const struct sensor_value *gyro, const struct s
 void send_hid_report()
 {
     int err;
-    const double scale = 100.0;
     struct sensor_data imu_get;
 
     gpio_pin_configure_dt(&cursor_enable_button, GPIO_INPUT);
+    gpio_pin_configure_dt(&change_scale_button, GPIO_INPUT);
 
     err = bt_enable(bt_ready);
     if (err) {
@@ -147,6 +168,12 @@ void send_hid_report()
         printk("Bluetooth authentication callbacks registered.\n");
     }
     while(1){
+        if (!gpio_pin_get_dt(&change_scale_button)) {
+            change_scale();
+        } else {
+            is_push &= ~CHANGE_SCALE_BUTTON_PUSHED;
+        }
+
         k_msgq_get(&imu_msgq, &imu_get, K_FOREVER);
         int is_cursor = gpio_pin_get_dt(&cursor_enable_button);
         if (is_cursor != 0) {
@@ -157,8 +184,8 @@ void send_hid_report()
         }
 
         send_mouse_report(
-            -calculate_cursor_movement(&imu_get.gyro_data.z, &imu_get.accel_data.z, scale),
-            -calculate_cursor_movement(&imu_get.gyro_data.y, &imu_get.accel_data.y, scale),0,0);
+            -calculate_cursor_movement(&imu_get.gyro_data.z, &imu_get.accel_data.z),
+            -calculate_cursor_movement(&imu_get.gyro_data.y, &imu_get.accel_data.y),0,0);
     }
 }
 
