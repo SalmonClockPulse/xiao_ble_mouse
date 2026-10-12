@@ -2,6 +2,9 @@
     aliases {
         cursor-enable-button = &cursor_enable;
         change-scale-button = &change_scale;
+        left-button = &left_button;
+        middle-button = &middle_button;
+        right-button = &right_button;
     };
 
     buttons {
@@ -13,6 +16,18 @@
 
         change_scale: button_1 {
             gpios = <&xiao_d 1 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+        };
+
+        left_button: button_2 {
+            gpios = <&xiao_d 2 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+        };
+
+        middle_button: button_3 {
+            gpios = <&xiao_d 3 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+        };
+
+        right_button: button_4 {
+            gpios = <&xiao_d 4 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
         };
     };
 };

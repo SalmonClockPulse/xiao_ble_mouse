@@ -15,9 +15,15 @@
 #define CURSOR_DEADZONE 0.05
 
 #define CHANGE_SCALE_BUTTON_PUSHED (1U << 0)
+#define LEFT_BUTTON_PUSHED (1U << 0)
+#define MIDDLE_BUTTON_PUSHED (1U << 1)
+#define RIGHT_BUTTON_PUSHED (1U << 2)
 
 static const struct gpio_dt_spec cursor_enable_button = GPIO_DT_SPEC_GET(DT_ALIAS(cursor_enable_button), gpios);
 static const struct gpio_dt_spec change_scale_button = GPIO_DT_SPEC_GET(DT_ALIAS(change_scale_button), gpios);
+static const struct gpio_dt_spec left_button = GPIO_DT_SPEC_GET(DT_ALIAS(left_button), gpios);
+static const struct gpio_dt_spec middle_button = GPIO_DT_SPEC_GET(DT_ALIAS(middle_button), gpios);
+static const struct gpio_dt_spec right_button = GPIO_DT_SPEC_GET(DT_ALIAS(right_button), gpios);
 static const double scale[3] = {10, 50, 100};
 
 static uint8_t scale_index = 0;
@@ -149,6 +155,31 @@ int8_t calculate_cursor_movement(const struct sensor_value *gyro, const struct s
     return (int8_t)movement;
 }
 
+uint8_t mouse_button_read()
+{
+    static uint8_t mouse_button_state = 0;
+
+    if (gpio_pin_get_dt(&left_button)){
+        mouse_button_state |= LEFT_BUTTON_PUSHED;
+    } else {
+        mouse_button_state &= ~LEFT_BUTTON_PUSHED;
+    }
+
+    if (gpio_pin_get_dt(&middle_button)){
+        mouse_button_state |= MIDDLE_BUTTON_PUSHED;
+    } else {
+        mouse_button_state &= ~MIDDLE_BUTTON_PUSHED;
+    }
+
+    if (gpio_pin_get_dt(&right_button)){
+        mouse_button_state |= RIGHT_BUTTON_PUSHED;
+    } else {
+        mouse_button_state &= ~RIGHT_BUTTON_PUSHED;
+    }
+
+    return mouse_button_state;
+}
+
 void send_hid_report()
 {
     int err;
@@ -156,6 +187,9 @@ void send_hid_report()
 
     gpio_pin_configure_dt(&cursor_enable_button, GPIO_INPUT);
     gpio_pin_configure_dt(&change_scale_button, GPIO_INPUT);
+    gpio_pin_configure_dt(&left_button, GPIO_INPUT);
+    gpio_pin_configure_dt(&middle_button, GPIO_INPUT);
+    gpio_pin_configure_dt(&right_button, GPIO_INPUT);
 
     err = bt_enable(bt_ready);
     if (err) {
@@ -167,12 +201,14 @@ void send_hid_report()
         bt_conn_auth_cb_register(&auth_cb_display);
         printk("Bluetooth authentication callbacks registered.\n");
     }
+
     while(1){
-        if (!gpio_pin_get_dt(&change_scale_button)) {
+        if (gpio_pin_get_dt(&change_scale_button)) {
             change_scale();
         } else {
             is_push &= ~CHANGE_SCALE_BUTTON_PUSHED;
         }
+
 
         k_msgq_get(&imu_msgq, &imu_get, K_FOREVER);
         int is_cursor = gpio_pin_get_dt(&cursor_enable_button);
@@ -185,7 +221,8 @@ void send_hid_report()
 
         send_mouse_report(
             -calculate_cursor_movement(&imu_get.gyro_data.z, &imu_get.accel_data.z),
-            -calculate_cursor_movement(&imu_get.gyro_data.y, &imu_get.accel_data.y),0,0);
+            -calculate_cursor_movement(&imu_get.gyro_data.y, &imu_get.accel_data.y),
+            mouse_button_read(),0);
     }
 }
 
